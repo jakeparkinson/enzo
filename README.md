@@ -10,6 +10,8 @@ A small system for managing Patients, Lab Tests, and Orders.
 npm install
 ```
 
+This also runs `prisma generate` automatically (via a `postinstall` script), which generates the Prisma Client into `lib/generated/prisma`. That folder is gitignored and required by nearly every server-side file in this project, so it must exist before `npm run dev` (or anything else) will work — the `postinstall` hook exists specifically so a fresh clone doesn't require an extra manual step here.
+
 **2. Set up a Postgres database**
 
 Copy `.env.example` to `.env` and set `DATABASE_URL` to a Postgres connection string:
@@ -26,11 +28,13 @@ npx create-db
 
 This prints a connection string — paste it into `.env` as `DATABASE_URL`. (Alternatively, point `DATABASE_URL` at any local or existing Postgres instance.)
 
-**3. Sync the database schema**
+**3. Apply migrations and seed the database**
 
 ```bash
-npx prisma db push
+npx prisma migrate dev
 ```
+
+This applies the committed migrations in `prisma/migrations/` to your database, then automatically runs `prisma/seed.ts` (configured via `migrations.seed` in `prisma.config.ts`), which creates a handful of sample patients, catalog tests, and orders so the dashboard has something to show immediately. The seed script is safe to re-run any time (`npm run db:seed`) — it skips creating patients/tests/orders that already exist rather than duplicating them.
 
 **4. Start the dev server**
 
@@ -47,6 +51,8 @@ npm run lint       # ESLint
 npm run typecheck  # tsc --noEmit
 npm run test       # Vitest (run once)
 npm run test:watch # Vitest (watch mode)
+npm run db:seed    # Re-run the seed script (safe to run multiple times)
+npx prisma generate # Regenerate the Prisma Client (e.g. after pulling schema changes)
 npx prisma studio  # Browse/edit database data in a GUI
 ```
 
@@ -57,7 +63,11 @@ npx prisma studio  # Browse/edit database data in a GUI
 - **Prisma + PostgreSQL** for the data layer. Uses a hosted Prisma Postgres database (via `create-db`) so the app runs with zero local database setup — swap `DATABASE_URL` for any other Postgres instance if preferred.
 - **Tailwind CSS + shadcn/ui** for styling and UI primitives.
 - **TypeScript strict mode** throughout; explicit types at module boundaries.
-- **Testing strategy** (Vitest): integration tests are prioritized around order creation (total cost + estimated ready-date calculation) since that's the core business logic; pure helpers get unit tests; end-to-end tests are skipped given the time budget.
+- **Testing strategy** (Vitest): integration tests are prioritized around the core business logic; pure helpers get unit tests; end-to-end tests are skipped given the time budget.
+  - `lib/orders/calculate-order-totals.test.ts` — unit tests for the pure total-cost/ready-date helper.
+  - `lib/orders/get-orders.test.ts` — integration tests that run the real filtering/sorting query against Postgres (via `DATABASE_URL`), including a regression test for sorting by patient name. Fixtures are tagged with a random run id and every query is scoped to that tag, so it's safe to run repeatedly against the same shared dev database without colliding with seed data or leftover rows from a previous run.
+  - `lib/orders/create-order.test.ts` — integration tests for order creation: totalCost/readyDate computed and persisted correctly (single test, multiple tests using MAX turnaround), price/turnaround snapshotting surviving later catalog edits, duplicate test ids being deduplicated, and unknown patient/test ids being rejected. Same tagging/cleanup approach as above.
+  - `app/api/orders/route.test.ts` — tests both route handlers' request validation and delegation with `getOrders`/`createOrder` mocked, since real query/creation correctness is already covered by the integration tests above.
 
 More rationale will be added here as design decisions are made during implementation. See `AGENTS.md` for the underlying engineering conventions this project follows.
 
@@ -95,8 +105,10 @@ A `cuid()` can be generated on the client/application side before the row is eve
 
 ## Known Limitations & What I'd Improve With More Time
 
-- The database schema exists and is migrated, but the app's UI/API (Patients, Lab Test Catalog, Orders features) are not yet implemented.
+- The orders dashboard (list, filter by patient/status, sort by patient/status/date/cost/ready date) and order creation (a "New Order" modal picking a patient + one or more catalog tests) are implemented. Creating/editing Patients and managing the Lab Test Catalog are not — the new-order form assumes both already exist and just lists them.
+- The new-order form's patient and test pickers are a plain dropdown/checklist, fine for a handful of seeded records but wouldn't scale to a large patient roster — a searchable combobox would be the next step.
 - The schema doesn't enforce that a `Patient` has at least one of email/phone at the database level — that validation belongs at the application layer, not yet written.
+- The integration tests run against the same `DATABASE_URL` as local dev (there's no separate test database). This is safe today because fixtures are tagged per test run and cleaned up afterward, but a real CI setup would use an isolated test database instead.
 - This section will be kept up to date with real limitations and trade-offs as the app is built.
 
 ---
