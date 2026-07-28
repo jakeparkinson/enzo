@@ -186,7 +186,12 @@ export function CreateOrderDialog({
                   className="w-full"
                   aria-invalid={!!errors.patientId}
                 >
-                  <SelectValue placeholder="Select a patient" />
+                  <SelectValue placeholder="Select a patient">
+                  {(value: string) => {
+                    const selected = patients.find((patient) => patient.id === value);
+                    return selected ? `${selected.lastName}, ${selected.firstName}` : value;
+                  }}
+                </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {patients.map((patient) => (

@@ -43,7 +43,11 @@ export function OrdersFilters({
         onValueChange={(value) => onStatusChange(value as OrderStatus | "ALL")}
       >
         <SelectTrigger className="sm:w-48" aria-label="Filter by status">
-          <SelectValue />
+          <SelectValue>
+            {(value: OrderStatus | "ALL") =>
+              STATUS_OPTIONS.find((option) => option.value === value)?.label ?? value
+            }
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {STATUS_OPTIONS.map((option) => (
