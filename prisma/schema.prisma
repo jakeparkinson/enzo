@@ -11,3 +11,80 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model Patient {
+  id          String   @id @default(cuid())
+  firstName   String
+  lastName    String
+  dateOfBirth DateTime @db.Date
+  email       String?
+  phone       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orders Order[]
+
+  @@index([lastName, firstName])
+}
+
+model LabTest {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  name           String
+  price          Decimal  @db.Decimal(10, 2)
+  turnaroundDays Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orderTests OrderTest[]
+}
+
+enum OrderStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+/// An order for one or more lab tests placed on behalf of a patient.
+///
+/// `totalCost` and `readyDate` are computed once at creation time from the
+/// selected tests and persisted here (not derived on every read) so orders
+/// remain a fixed historical record, and so the list/filter views can query
+/// and sort on them directly. `readyDate` is `createdAt + MAX(turnaround)`
+/// across the order's tests, since tests are assumed to run in parallel.
+model Order {
+  id        String      @id @default(cuid())
+  patientId String
+  status    OrderStatus @default(PENDING)
+  totalCost Decimal     @db.Decimal(10, 2)
+  readyDate DateTime
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  patient Patient     @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  tests   OrderTest[]
+
+  @@index([patientId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// A single test line item on an order. `priceAtOrder` and
+/// `turnaroundDaysAtOrder` snapshot the catalog values at the moment the
+/// order was placed, so later edits to the `LabTest` catalog never change
+/// the cost or ready date of orders already placed. A per-line-item ready
+/// date isn't stored separately — it's just `order.createdAt +
+/// turnaroundDaysAtOrder`.
+model OrderTest {
+  id                    String  @id @default(cuid())
+  orderId               String
+  labTestId             String
+  priceAtOrder          Decimal @db.Decimal(10, 2)
+  turnaroundDaysAtOrder Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  labTest LabTest @relation(fields: [labTestId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, labTestId])
+}
