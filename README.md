@@ -34,13 +34,12 @@ npx create-db
 
 This prints a connection string — paste it into `.env` as `DATABASE_URL`. (Alternatively, point `DATABASE_URL` at any local or existing Postgres instance.)
 
-**3. Apply migrations and seed the database**
+**3. Apply migrations, then seed the database**
 
 ```bash
 npx prisma migrate dev
+npm run db:seed
 ```
-
-This applies the committed migrations in `prisma/migrations/` to your database, then automatically runs `prisma/seed.ts` (configured via `migrations.seed` in `prisma.config.ts`), which creates a handful of sample patients, catalog tests, and orders so the dashboard has something to show immediately. The seed script is safe to re-run any time (`npm run db:seed`) — it skips creating patients/tests/orders that already exist rather than duplicating them.
 
 **4. Start the dev server**
 
