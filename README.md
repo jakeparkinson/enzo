@@ -68,6 +68,9 @@ npx prisma studio  # Browse/edit database data in a GUI
   - `lib/orders/get-orders.test.ts` — integration tests that run the real filtering/sorting query against Postgres (via `DATABASE_URL`), including a regression test for sorting by patient name. Fixtures are tagged with a random run id and every query is scoped to that tag, so it's safe to run repeatedly against the same shared dev database without colliding with seed data or leftover rows from a previous run.
   - `lib/orders/create-order.test.ts` — integration tests for order creation: totalCost/readyDate computed and persisted correctly (single test, multiple tests using MAX turnaround), price/turnaround snapshotting surviving later catalog edits, duplicate test ids being deduplicated, and unknown patient/test ids being rejected. Same tagging/cleanup approach as above.
   - `app/api/orders/route.test.ts` — tests both route handlers' request validation and delegation with `getOrders`/`createOrder` mocked, since real query/creation correctness is already covered by the integration tests above.
+  - `lib/lab-tests/parse-lab-test-input.test.ts` — unit tests for the pure request-body validator shared by the create/edit catalog endpoints.
+  - `lib/lab-tests/create-lab-test.test.ts`, `update-lab-test.test.ts`, `delete-lab-test.test.ts` — integration tests against Postgres for each catalog mutation: duplicate-code rejection, unknown-id rejection, the snapshotting guarantee surviving a catalog edit, and (for delete) refusing to remove a test still referenced by an order. Same tagging/cleanup approach as the orders integration tests.
+  - `app/api/lab-tests/route.test.ts`, `app/api/lab-tests/[id]/route.test.ts` — route handler validation/delegation tests with the mutation functions mocked, mirroring `app/api/orders/route.test.ts`.
 
 More rationale will be added here as design decisions are made during implementation. See `AGENTS.md` for the underlying engineering conventions this project follows.
 
@@ -103,10 +106,23 @@ A `cuid()` can be generated on the client/application side before the row is eve
 
 **Indexes.** `Patient` is indexed on `(lastName, firstName)` since patient search/lookup is a listed feature. `Order` is indexed on `patientId`, `status`, and `createdAt` since the order list needs to filter by patient and status and will typically be sorted by recency — all listed requirements in the brief.
 
+### Lab Test Catalog management
+
+The `/lab-tests` page and its `GET/POST /api/lab-tests` + `GET/PATCH/DELETE /api/lab-tests/[id]` endpoints let staff add, edit, and remove catalog entries (code, name, price, turnaround days). A top nav (`components/site-nav.tsx`) was added to `app/layout.tsx` so both pages are reachable now that there's more than one.
+
+**Why `PATCH` is a full replace of all four fields, not a partial update.** A real partial-update `PATCH` (only touching whichever fields are present in the body) adds real complexity — distinguishing "field omitted" from "field explicitly cleared" in the JSON body, and building the corresponding Prisma `data` object dynamically. The edit dialog always has and submits all four fields anyway (it's a small, fully-loaded form, not a bulk/API-first editing surface), so there's no actual use case for partial updates here. Sending the complete object keeps the request shape identical to `POST`, which is why both routes share one `parseLabTestInput` validator.
+
+**Why code uniqueness and the delete-when-in-use rule are checked explicitly in the mutation functions, not by catching Prisma's constraint-violation error codes.** `code` is `@unique` in the schema and `OrderTest.labTest` is `onDelete: Restrict` (see above), so the database would reject an invalid create/update/delete either way. But catching `P2002`/`P2003` afterwards means inferring which constraint fired from an opaque error code, and it fires only after the write was attempted. Querying first (`findUnique` by code before create/update; `orderTest.count` before delete) costs one extra round-trip but keeps the check readable and produces the exact same user-facing 409 the schema constraint exists to prevent — consistent with how `createOrder` already validates patient/test ids up front rather than reacting to a foreign-key failure.
+
+**Why the catalog is normalized to an uppercase, trimmed `code`.** Codes are short mnemonic identifiers (`CBC`, `TSH`, ...), effectively the catalog's human-facing primary key. Without normalization, `"cbc"` and `"CBC"` would pass the database's uniqueness check as two different rows, which is almost certainly a data-entry accident, not an intentional distinction — normalizing at the validation boundary (`parseLabTestInput`) closes that gap for both create and edit.
+
+**Why deleting a lab test is blocked instead of soft-deleted.** Given the `Restrict` FK relationship already forces this decision at the schema level (see above), the UI/API just surfaces it clearly (a specific 409 message) rather than trying to route around it with a soft-delete flag, which would add a new column and a "is this test still available to order?" filter everywhere the catalog is read, for a feature not in scope.
+
 ## Known Limitations & What I'd Improve With More Time
 
-- The orders dashboard (list, filter by patient/status, sort by patient/status/date/cost/ready date) and order creation (a "New Order" modal picking a patient + one or more catalog tests) are implemented. Creating/editing Patients and managing the Lab Test Catalog are not — the new-order form assumes both already exist and just lists them.
+- The orders dashboard (list, filter by patient/status, sort by patient/status/date/cost/ready date), order creation, and the Lab Test Catalog (list, create, edit, delete) are implemented. Creating/editing Patients is not — the new-order form assumes patients already exist and just lists them.
 - The new-order form's patient and test pickers are a plain dropdown/checklist, fine for a handful of seeded records but wouldn't scale to a large patient roster — a searchable combobox would be the next step.
+- The Lab Test Catalog page has no search/filter/sort controls (unlike the orders list) — a reasonable trade-off while the catalog is a handful of rows, but worth adding (probably just a name/code search box) if it were expected to grow to dozens/hundreds of tests.
 - The schema doesn't enforce that a `Patient` has at least one of email/phone at the database level — that validation belongs at the application layer, not yet written.
 - The integration tests run against the same `DATABASE_URL` as local dev (there's no separate test database). This is safe today because fixtures are tagged per test run and cleaned up afterward, but a real CI setup would use an isolated test database instead.
 - This section will be kept up to date with real limitations and trade-offs as the app is built.

@@ -26,7 +26,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 Before considering work done, ensure:
 
-1. **Tests** — prioritize integration tests around order creation (cost + ready-date calculation) since that's the core business logic; unit test pure helpers; skip e2e given time budget. I will manually test with browser.
+1. **Tests** — prioritize integration tests around order creation (cost + ready-date calculation) since that's the core business logic; unit test pure helpers; skip e2e given time budget. I will manually test with browser, do not launch browsers.
 2. **Lint** passes (`eslint` / project lint script).
 3. **TypeScript** checks pass (`tsc` / `next build` typecheck — no type errors).
 
