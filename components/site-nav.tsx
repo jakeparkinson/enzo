@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 
 const NAV_LINKS = [
   { href: "/", label: "Orders" },
+  { href: "/patients", label: "Patients" },
   { href: "/lab-tests", label: "Lab Test Catalog" },
 ];
 

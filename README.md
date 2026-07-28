@@ -2,6 +2,12 @@
 
 A small system for managing Patients, Lab Tests, and Orders.
 
+## Features
+
+- **Orders** (`/`) — list all orders, filter by patient name or status, sort any column; create a new order for a patient with one or more catalog tests, with total cost and estimated ready date computed automatically.
+- **Patients** (`/patients`) — list all patients; create and edit a patient's name, date of birth, and contact info (email and/or phone).
+- **Lab Test Catalog** (`/lab-tests`) — list all catalog tests; create, edit, and delete entries (code, name, price, turnaround days). A test in use by an existing order can't be deleted.
+
 ## Setup & Running Locally
 
 **1. Install dependencies**
@@ -71,8 +77,11 @@ npx prisma studio  # Browse/edit database data in a GUI
   - `lib/lab-tests/parse-lab-test-input.test.ts` — unit tests for the pure request-body validator shared by the create/edit catalog endpoints.
   - `lib/lab-tests/create-lab-test.test.ts`, `update-lab-test.test.ts`, `delete-lab-test.test.ts` — integration tests against Postgres for each catalog mutation: duplicate-code rejection, unknown-id rejection, the snapshotting guarantee surviving a catalog edit, and (for delete) refusing to remove a test still referenced by an order. Same tagging/cleanup approach as the orders integration tests.
   - `app/api/lab-tests/route.test.ts`, `app/api/lab-tests/[id]/route.test.ts` — route handler validation/delegation tests with the mutation functions mocked, mirroring `app/api/orders/route.test.ts`.
+  - `lib/patients/parse-patient-input.test.ts` — unit tests for the pure request-body validator (including the date-of-birth format/future-date checks and the "at least one of email/phone" rule).
+  - `lib/patients/create-patient.test.ts`, `update-patient.test.ts` — integration tests against Postgres for the two patient mutations.
+  - `app/api/patients/route.test.ts`, `app/api/patients/[id]/route.test.ts` — route handler validation/delegation tests with the mutation functions mocked.
 
-More rationale will be added here as design decisions are made during implementation. See `AGENTS.md` for the underlying engineering conventions this project follows.
+See `AGENTS.md` for the underlying engineering conventions this project follows.
 
 ### Data model
 
@@ -108,7 +117,7 @@ A `cuid()` can be generated on the client/application side before the row is eve
 
 ### Lab Test Catalog management
 
-The `/lab-tests` page and its `GET/POST /api/lab-tests` + `GET/PATCH/DELETE /api/lab-tests/[id]` endpoints let staff add, edit, and remove catalog entries (code, name, price, turnaround days). A top nav (`components/site-nav.tsx`) was added to `app/layout.tsx` so both pages are reachable now that there's more than one.
+The `/lab-tests` page and its `GET/POST /api/lab-tests` + `PATCH/DELETE /api/lab-tests/[id]` endpoints let staff add, edit, and remove catalog entries (code, name, price, turnaround days). A top nav (`components/site-nav.tsx`) was added to `app/layout.tsx` once there was more than one page to link between; it now covers all three (Orders, Patients, Lab Test Catalog).
 
 **Why `PATCH` is a full replace of all four fields, not a partial update.** A real partial-update `PATCH` (only touching whichever fields are present in the body) adds real complexity — distinguishing "field omitted" from "field explicitly cleared" in the JSON body, and building the corresponding Prisma `data` object dynamically. The edit dialog always has and submits all four fields anyway (it's a small, fully-loaded form, not a bulk/API-first editing surface), so there's no actual use case for partial updates here. Sending the complete object keeps the request shape identical to `POST`, which is why both routes share one `parseLabTestInput` validator.
 
@@ -118,14 +127,25 @@ The `/lab-tests` page and its `GET/POST /api/lab-tests` + `GET/PATCH/DELETE /api
 
 **Why deleting a lab test is blocked instead of soft-deleted.** Given the `Restrict` FK relationship already forces this decision at the schema level (see above), the UI/API just surfaces it clearly (a specific 409 message) rather than trying to route around it with a soft-delete flag, which would add a new column and a "is this test still available to order?" filter everywhere the catalog is read, for a feature not in scope.
 
+### Patient management
+
+The `/patients` page and its `GET/POST /api/patients` + `PATCH /api/patients/[id]` endpoints let staff register new patients and correct their name/DOB/contact info. Unlike the Lab Test Catalog, there's no delete — it wasn't asked for, and a `Patient` referenced by an order is `Restrict`-protected at the schema level anyway (see above), so deleting one meaningfully would need the same kind of in-use guard as `LabTest` deletion for no requested benefit.
+
+**Why `GET /api/patients` now returns full patient records instead of just the picker's `{id, firstName, lastName}`.** Before this feature, the endpoint only backed the new-order patient picker, so `PatientOptionDto` deliberately excluded contact info. Now that there's a real "list all patients" page, that's the more natural shape for the one list endpoint to return — a second endpoint/query for what's otherwise the same table and ordering would just be duplication. `PatientOptionDto` still exists as the narrower type the picker component actually reads (structurally compatible with the fuller response), documenting that the picker doesn't need the extra fields even though they're now present on the wire.
+
+**Why the app-layer "at least one of email or phone" rule lives in `parsePatientInput`, not a database constraint.** Earlier versions of this README called this out as a known limitation — it's resolved now, but still at the application layer rather than the schema. A `CHECK` constraint could enforce it in Postgres, but Prisma's schema DSL can't express "at least one of these two nullable columns is non-null" declaratively (it would need a raw SQL migration), and the rule is a product/data-quality judgment call ("a patient a clinic can't reach isn't useful data") rather than a structural invariant of the data itself, which is exactly the kind of rule that belongs in application validation rather than the schema.
+
+**Why date-of-birth is deliberately kept on the UTC-midnight code path end-to-end.** A `<input type="date">` gives a plain `"YYYY-MM-DD"` string with no timezone; parsing it with `new Date("1990-01-01")` (not `new Date(year, month, day)`) always yields UTC midnight, which is also how Prisma reads a `@db.Date` column back. Rendering it, in turn, uses a dedicated `formatDateOfBirth` (pinned to `timeZone: "UTC"`) rather than the existing `formatDate` used for order timestamps. Mixing the two — e.g. formatting a date-of-birth with a local-timezone formatter — is a classic source of an off-by-one-day bug for anyone west of UTC, so the two helpers are kept intentionally separate rather than reusing one "format a date" function for both a pure calendar date and an actual timestamp.
+
 ## Known Limitations & What I'd Improve With More Time
 
-- The orders dashboard (list, filter by patient/status, sort by patient/status/date/cost/ready date), order creation, and the Lab Test Catalog (list, create, edit, delete) are implemented. Creating/editing Patients is not — the new-order form assumes patients already exist and just lists them.
 - The new-order form's patient and test pickers are a plain dropdown/checklist, fine for a handful of seeded records but wouldn't scale to a large patient roster — a searchable combobox would be the next step.
-- The Lab Test Catalog page has no search/filter/sort controls (unlike the orders list) — a reasonable trade-off while the catalog is a handful of rows, but worth adding (probably just a name/code search box) if it were expected to grow to dozens/hundreds of tests.
-- The schema doesn't enforce that a `Patient` has at least one of email/phone at the database level — that validation belongs at the application layer, not yet written.
+- The Lab Test Catalog and Patients pages have no search/filter/sort controls (unlike the orders list) — a reasonable trade-off while both are a handful of rows, but worth adding (a name/code search box) if either were expected to grow to dozens/hundreds of rows.
+- There's no patient delete, matching the brief (which only asks for create/update) and the `Restrict` relationship on `Order.patient` — if it were added later, it'd need the same "reject if referenced by an order" guard `deleteLabTest` already implements.
+- An order's status can only be set at creation (defaults to `PENDING`) and filtered on in the list — there's no way to transition it (e.g. to `IN_PROGRESS`/`COMPLETED`/`CANCELLED`) from the UI or API yet. This was cut for scope; it'd be a small addition (a `PATCH /api/orders/[id]` restricted to just the `status` field) but wasn't part of the brief's example feature list.
+- None of the three list views (orders, lab tests, patients) paginate — they load and render every row in one request. Fine at seed-data scale; a real deployment would need cursor- or offset-based pagination on all three before the row count grew large.
+- There's no authentication/authorization — every page and API route is open to anyone who can reach the server. Reasonable for a local take-home exercise, but the first thing to add before this touched real patient data.
 - The integration tests run against the same `DATABASE_URL` as local dev (there's no separate test database). This is safe today because fixtures are tagged per test run and cleaned up afterward, but a real CI setup would use an isolated test database instead.
-- This section will be kept up to date with real limitations and trade-offs as the app is built.
 
 ---
 
